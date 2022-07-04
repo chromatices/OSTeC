@@ -1,21 +1,17 @@
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019, NVIDIA Corporation. All rights reserved.
 #
-# NVIDIA CORPORATION and its licensors retain all intellectual property
-# and proprietary rights in and to this software, related documentation
-# and any modifications thereto.  Any use, reproduction, disclosure or
-# distribution of this software and related documentation without an express
-# license agreement from NVIDIA CORPORATION is strictly prohibited.
+# This work is made available under the Nvidia Source Code License-NC.
+# To view a copy of this license, visit
+# https://nvlabs.github.io/stylegan2/license.html
 
-"""Inception Score (IS) from the paper
-"Improved techniques for training GANs"."""
+"""Inception Score (IS)."""
 
-import pickle
 import numpy as np
 import tensorflow as tf
-import dnnlib
 import dnnlib.tflib as tflib
 
 from metrics import metric_base
+from training import misc
 
 #----------------------------------------------------------------------------
 
@@ -26,22 +22,20 @@ class IS(metric_base.MetricBase):
         self.num_splits = num_splits
         self.minibatch_per_gpu = minibatch_per_gpu
 
-    def _evaluate(self, Gs, G_kwargs, num_gpus, **_kwargs): # pylint: disable=arguments-differ
+    def _evaluate(self, Gs, Gs_kwargs, num_gpus):
         minibatch_size = num_gpus * self.minibatch_per_gpu
-        with dnnlib.util.open_url('https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada/pretrained/metrics/inception_v3_softmax.pkl') as f:
-            inception = pickle.load(f)
+        inception = misc.load_pkl('https://nvlabs-fi-cdn.nvidia.com/stylegan/networks/metrics/inception_v3_softmax.pkl')
         activations = np.empty([self.num_images, inception.output_shape[1]], dtype=np.float32)
 
         # Construct TensorFlow graph.
         result_expr = []
         for gpu_idx in range(num_gpus):
-            with tf.device(f'/gpu:{gpu_idx}'):
+            with tf.device('/gpu:%d' % gpu_idx):
                 Gs_clone = Gs.clone()
                 inception_clone = inception.clone()
                 latents = tf.random_normal([self.minibatch_per_gpu] + Gs_clone.input_shape[1:])
                 labels = self._get_random_labels_tf(self.minibatch_per_gpu)
-                images = Gs_clone.get_output_for(latents, labels, **G_kwargs)
-                if images.shape[1] == 1: images = tf.tile(images, [1, 3, 1, 1])
+                images = Gs_clone.get_output_for(latents, labels, **Gs_kwargs)
                 images = tflib.convert_images_to_uint8(images)
                 result_expr.append(inception_clone.get_output_for(images))
 

@@ -1,10 +1,8 @@
-﻿# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019, NVIDIA Corporation. All rights reserved.
 #
-# NVIDIA CORPORATION and its licensors retain all intellectual property
-# and proprietary rights in and to this software, related documentation
-# and any modifications thereto.  Any use, reproduction, disclosure or
-# distribution of this software and related documentation without an express
-# license agreement from NVIDIA CORPORATION is strictly prohibited.
+# This work is made available under the Nvidia Source Code License-NC.
+# To view a copy of this license, visit
+# https://nvlabs.github.io/stylegan2/license.html
 
 """Helper wrapper for a Tensorflow optimizer."""
 
@@ -132,7 +130,7 @@ class Optimizer:
         assert all(var.shape.as_list() == var_shape for var, var_shape in zip(trainable_vars, self._gradient_shapes))
 
         # Report memory usage if requested.
-        deps = [loss]
+        deps = []
         if self._report_mem_usage:
             self._report_mem_usage = False
             try:
