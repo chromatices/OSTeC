@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
 #
 # NVIDIA CORPORATION and its licensors retain all intellectual property
 # and proprietary rights in and to this software, related documentation
@@ -546,6 +546,7 @@ class Network:
             minibatch_size: int = None,
             num_gpus: int = 1,
             assume_frozen: bool = False,
+            custom_inputs: Any = None,
             **dynamic_kwargs) -> Union[np.ndarray, Tuple[np.ndarray, ...], List[np.ndarray]]:
         """Run this network for the given NumPy array(s), and return the output(s) as NumPy array(s).
 
@@ -561,6 +562,7 @@ class Network:
             minibatch_size:     Maximum minibatch size to use, None = disable batching.
             num_gpus:           Number of GPUs to use.
             assume_frozen:      Improve multi-GPU performance by assuming that the trainable parameters will remain changed between calls.
+            custom_inputs:      Allow to use another tensor as input instead of default placeholders.
             dynamic_kwargs:     Additional keyword arguments to be passed into the network build function.
         """
         assert len(in_arrays) == self.num_inputs
@@ -585,13 +587,18 @@ class Network:
         # Build graph.
         if key not in self._run_cache:
             with tfutil.absolute_name_scope(self.scope + "/_Run"), tf.control_dependencies(None):
-                with tf.device("/cpu:0"):
-                    in_expr = [tf.placeholder(tf.float32, name=name) for name in self.input_names]
-                    in_split = list(zip(*[tf.split(x, num_gpus) for x in in_expr]))
+                if custom_inputs is not None:
+                    with tf.device("/gpu:0"):
+                        in_expr = [input_builder(name) for input_builder, name in zip(custom_inputs, self.input_names)]
+                        in_split = list(zip(*[tf.split(x, num_gpus) for x in in_expr]))
+                else:
+                    with tf.device("/cpu:0"):
+                        in_expr = [tf.placeholder(tf.float32, name=name) for name in self.input_names]
+                        in_split = list(zip(*[tf.split(x, num_gpus) for x in in_expr]))
 
                 out_split = []
                 for gpu in range(num_gpus):
-                    with tf.device(self.device if num_gpus == 1 else "/gpu:%d" % gpu):
+                    with tf.device("/gpu:%d" % gpu):
                         net_gpu = self.clone() if assume_frozen else self
                         in_gpu = in_split[gpu]
 
@@ -640,7 +647,6 @@ class Network:
         return out_arrays
 
     def list_ops(self) -> List[TfExpression]:
-        _ = self.output_templates  # ensure that the template graph has been created
         include_prefix = self.scope + "/"
         exclude_prefix = include_prefix + "_"
         ops = tf.get_default_graph().get_operations()
@@ -654,9 +660,6 @@ class Network:
         layers = []
 
         def recurse(scope, parent_ops, parent_vars, level):
-            if len(parent_ops) == 0 and len(parent_vars) == 0:
-                return
-
             # Ignore specific patterns.
             if any(p in scope for p in ["/Shape", "/strided_slice", "/Cast", "/concat", "/Assign"]):
                 return
@@ -676,7 +679,7 @@ class Network:
 
             # Scope does not contain ops as immediate children => recurse deeper.
             contains_direct_ops = any("/" not in op.name[len(global_prefix):] and op.type not in ["Identity", "Cast", "Transpose"] for op in cur_ops)
-            if (level == 0 or not contains_direct_ops) and (len(cur_ops) != 0 or len(cur_vars) != 0):
+            if (level == 0 or not contains_direct_ops) and (len(cur_ops) + len(cur_vars)) > 1:
                 visited = set()
                 for rel_name in [op.name[len(global_prefix):] for op in cur_ops] + [name[len(local_prefix):] for name, _var in cur_vars]:
                     token = rel_name.split("/")[0]
@@ -691,7 +694,7 @@ class Network:
             layer_trainables = [var for _name, var in cur_vars if var.trainable]
             layers.append((layer_name, layer_output, layer_trainables))
 
-        recurse(self.scope, self.list_ops(), list(self._get_vars().items()), 0)
+        recurse(self.scope, self.list_ops(), list(self.vars.items()), 0)
         return layers
 
     def print_layers(self, title: str = None, hide_layers_with_no_params: bool = False) -> None:
@@ -729,7 +732,7 @@ class Network:
             title = self.name
 
         with tf.name_scope(None), tf.device(None), tf.control_dependencies(None):
-            for local_name, var in self._get_trainables().items():
+            for local_name, var in self.trainables.items():
                 if "/" in local_name:
                     p = local_name.split("/")
                     name = title + "_" + p[-1] + "/" + "_".join(p[:-1])
